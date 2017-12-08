@@ -1,0 +1,192 @@
+<!--
+This code has been adapted from https://github.com/kaizouman/js-delaunay-effect/blob/master/index.html
+This is the UI which displays the live video stream from the laptop camera and in another panel
+the live triangulation of the fast corner feature points.
+This code has been modified to show the original video stream and the live triangulation separately.
+-->
+
+<!doctype html>
+
+<html lang="en">
+    <head>
+        <title>Live Delanauy Triangulation</title>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Sans:regular,bold|Inconsolata|PT+Sans:400,700">
+    </head>
+    <body>
+        <video id="webcam" width="640" height="480" style="display:none;"></video>
+        <div style=" width:640px;height:480px;margin: 10px auto;">
+          <canvas id="canvas" width="640" height="480"></canvas>
+          <div id="no_rtc" class="alert alert-error" style="display:none;"></div>
+          <div id="log" class="alert alert-info"></div>
+          <canvas id="grid" width="640" height="480"></canvas>
+        </div>
+
+        <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
+        <script type="text/javascript" src="js/jsfeat/build/jsfeat-min.js"></script>
+        <script type="text/javascript" src="js/compatibility.js"></script>
+        <script type="text/javascript" src="js/profiler.js"></script>
+        <script type="text/javascript" src="js/delaunay.js"></script>
+        <script type="text/javascript">
+
+        $(window).load(function() {
+            "use strict";
+
+            // lets do some fun
+            var video = document.getElementById('webcam');
+            var canvas = document.getElementById('canvas');
+            var grid = document.getElementById('grid');
+            try {
+                var attempts = 0;
+                var readyListener = function(event) {
+                    findVideoSize();
+                };
+                var findVideoSize = function() {
+                    if(video.videoWidth > 0 && video.videoHeight > 0) {
+                        video.removeEventListener('loadeddata', readyListener);
+                        onDimensionsReady(video.videoWidth, video.videoHeight);
+                    } else {
+                        if(attempts < 10) {
+                            attempts++;
+                            setTimeout(findVideoSize, 200);
+                        } else {
+                            onDimensionsReady(640, 480);
+                        }
+                    }
+                };
+                var onDimensionsReady = function(width, height) {
+                    demo_app(width, height);
+                    compatibility.requestAnimationFrame(tick);
+                };
+
+                video.addEventListener('loadeddata', readyListener);
+
+                compatibility.getUserMedia({video: true}, function(stream) {
+                    try {
+                        video.src = compatibility.URL.createObjectURL(stream);
+                    } catch (error) {
+                        video.src = stream;
+                    }
+                    setTimeout(function() {
+                            video.play();
+                            demo_app();
+
+                            compatibility.requestAnimationFrame(tick);
+                        }, 500);
+                }, function (error) {
+                    $('#canvas').hide();
+                    $('#log').hide();
+                    $('#no_rtc').html('<h4>WebRTC not available.</h4>');
+                    $('#no_rtc').show();
+                });
+            } catch (error) {
+                $('#canvas').hide();
+                $('#log').hide();
+                $('#no_rtc').html('<h4>Something goes wrong...</h4>');
+                $('#no_rtc').show();
+            }
+
+            var stat = new profiler();
+
+            var gui,ctx,canvasWidth,canvasHeight,gridCtx;
+            var img_u8, corners, threshold;
+
+            var demo_opt = function(){
+                this.threshold = 20;
+                this.draw_borders = true;
+            }
+
+            function demo_app(videoWidth, videoHeight) {
+                canvasWidth  = canvas.width;
+                canvasHeight = canvas.height;
+                ctx = canvas.getContext('2d');
+                gridCtx = grid.getContext('2d');
+
+                ctx.fillStyle = "rgb(0,255,0)";
+                ctx.strokeStyle = "rgb(0,255,0)";
+
+                img_u8 = new jsfeat.matrix_t(640, 480, jsfeat.U8_t | jsfeat.C1_t);
+
+                corners = [];
+                var i = 640*480;
+                while(--i >= 0) {
+                    corners[i] = new jsfeat.keypoint_t(0,0,0,0);
+                }
+
+                threshold = 20;
+
+                jsfeat.fast_corners.set_threshold(threshold);
+                stat.add("grayscale");
+                stat.add("fast corners");
+                stat.add("triangles");
+                stat.add("rendering");
+            }
+
+            function tick() {
+                compatibility.requestAnimationFrame(tick);
+                stat.new_frame();
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    ctx.drawImage(video, 0, 0, 640, 480);
+                    var imageData = ctx.getImageData(0, 0, 640, 480);
+
+                    stat.start("grayscale");
+                    jsfeat.imgproc.grayscale(imageData.data, 640, 480, img_u8);
+                    stat.stop("grayscale");
+
+                    stat.start("fast corners");
+                    var count = jsfeat.fast_corners.detect(img_u8, corners, 5);
+                    stat.stop("fast corners");
+                    stat.start("triangles");
+                    var vertices = [{x:0,y:0},{x:canvasWidth,y:0},{x:canvasWidth,y:canvasHeight},{x:0,y:canvasHeight}];
+                    for(var i=0;i<count;i++) {
+                        vertices.push(corners[i]);
+                    }
+                    var triangles = triangulate(vertices);
+                    stat.stop("triangles");
+                    ctx.putImageData(imageData, 0, 0);
+
+                    var getTriangleColor = function (img,triangle) {
+                  		var getColor = function (point) {
+                  			var offset = (point.x+point.y*canvasWidth)*4;
+                  			return {    r:img.data[offset],
+                  						g:img.data[offset+1],
+                  						b:img.data[offset+2]  };
+                  		}
+                  		var midPoint = function (point1,point2) {
+                  			return {x:(point1.x+point2.x)/2,
+                  					y:(point1.y+point2.y)/2};
+                  		}
+                  		// Pick a point inside the triangle
+                  		var point1 = midPoint(triangle.a,triangle.b);
+                  		var point = midPoint(point1,triangle.c);
+                  		return getColor({x:Math.floor(point.x),y:Math.floor(point.y)});
+                  	}
+                    stat.start("rendering");
+                    for(var i=0;i<triangles.length;i++) {
+                        var color = triangles[i].color = getTriangleColor(imageData,triangles[i]);
+                        gridCtx.fillStyle = 'rgb('+
+                            color.r+','+
+                            color.g+','+
+                            color.b+')';
+                        gridCtx.beginPath();
+                        gridCtx.moveTo(triangles[i].a.x,triangles[i].a.y);
+                        gridCtx.lineTo(triangles[i].b.x,triangles[i].b.y);
+                        gridCtx.lineTo(triangles[i].c.x,triangles[i].c.y);
+                        gridCtx.closePath();
+                        gridCtx.strokeStyle = 'black';
+                        gridCtx.stroke();
+                        gridCtx.fill();
+                    }
+                    stat.stop("rendering");
+
+                    $('#log').html(stat.log());
+                }
+            }
+
+            $(window).unload(function() {
+                video.pause();
+                video.src=null;
+            });
+        });
+        </script>
+    </body>
+</html>
