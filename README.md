@@ -10,9 +10,9 @@ Time Complexity: O(n^1.5)
 
 ## Credits:
 
-UI: https://github.com/kaizouman/js-delaunay-effect/
-Algorithm: http://paulbourke.net/papers/triangulate/
-Image Processing: https://github.com/inspirit/jsfeat/
+- UI: https://github.com/kaizouman/js-delaunay-effect/
+- Algorithm: http://paulbourke.net/papers/triangulate/
+- Image Processing: https://github.com/inspirit/jsfeat/
 
 ## Future Work:
 
